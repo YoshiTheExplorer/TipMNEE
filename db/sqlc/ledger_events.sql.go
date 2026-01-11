@@ -8,156 +8,73 @@ package db
 import (
 	"context"
 	"database/sql"
-	"time"
 )
 
-const backfillUserIDForChannel = `-- name: BackfillUserIDForChannel :exec
+const backfillLedgerEventsUserIDForChannel = `-- name: BackfillLedgerEventsUserIDForChannel :exec
 UPDATE ledger_events
-SET user_id = $1, updated_at = NOW()
+SET user_id = $1,
+    updated_at = NOW()
 WHERE platform = $2
   AND platform_user_id = $3
   AND user_id IS NULL
 `
 
-type BackfillUserIDForChannelParams struct {
+type BackfillLedgerEventsUserIDForChannelParams struct {
 	UserID         sql.NullInt64 `json:"user_id"`
 	Platform       string        `json:"platform"`
 	PlatformUserID string        `json:"platform_user_id"`
 }
 
-func (q *Queries) BackfillUserIDForChannel(ctx context.Context, arg BackfillUserIDForChannelParams) error {
-	_, err := q.db.ExecContext(ctx, backfillUserIDForChannel, arg.UserID, arg.Platform, arg.PlatformUserID)
+func (q *Queries) BackfillLedgerEventsUserIDForChannel(ctx context.Context, arg BackfillLedgerEventsUserIDForChannelParams) error {
+	_, err := q.db.ExecContext(ctx, backfillLedgerEventsUserIDForChannel, arg.UserID, arg.Platform, arg.PlatformUserID)
 	return err
 }
 
-const createLedgerEvent = `-- name: CreateLedgerEvent :one
-INSERT INTO ledger_events (
-  platform, platform_user_id, user_id,
-  event_type, amount_raw, message,
-  tx_hash, log_index, block_time,
-  created_at, updated_at
-) VALUES (
-  $1, $2, $3,
-  $4, $5, $6,
-  $7, $8, $9,
-  NOW(), NOW()
-)
-ON CONFLICT (tx_hash, log_index) DO NOTHING
-RETURNING id, platform, platform_user_id, user_id, event_type, amount_raw, message, tx_hash, log_index, block_time, created_at, updated_at
+const getEarningsSummaryForUser = `-- name: GetEarningsSummaryForUser :one
+SELECT
+  COALESCE(SUM(CASE WHEN event_type IN ('TIP_DIRECT','TIP_ESCROW') THEN amount_raw ELSE 0 END), 0)::text AS earned_raw,
+  COALESCE(SUM(CASE WHEN event_type = 'WITHDRAW' THEN amount_raw ELSE 0 END), 0)::text AS withdrawn_raw,
+  (
+    COALESCE(SUM(CASE WHEN event_type IN ('TIP_DIRECT','TIP_ESCROW') THEN amount_raw ELSE 0 END), 0)
+    -
+    COALESCE(SUM(CASE WHEN event_type = 'WITHDRAW' THEN amount_raw ELSE 0 END), 0)
+  )::text AS pending_raw
+FROM ledger_events
+WHERE user_id = $1::bigint
 `
 
-type CreateLedgerEventParams struct {
-	Platform       string         `json:"platform"`
-	PlatformUserID string         `json:"platform_user_id"`
-	UserID         sql.NullInt64  `json:"user_id"`
-	EventType      string         `json:"event_type"`
-	AmountRaw      string         `json:"amount_raw"`
-	Message        sql.NullString `json:"message"`
-	TxHash         string         `json:"tx_hash"`
-	LogIndex       int32          `json:"log_index"`
-	BlockTime      time.Time      `json:"block_time"`
+type GetEarningsSummaryForUserRow struct {
+	EarnedRaw    string `json:"earned_raw"`
+	WithdrawnRaw string `json:"withdrawn_raw"`
+	PendingRaw   string `json:"pending_raw"`
 }
 
-func (q *Queries) CreateLedgerEvent(ctx context.Context, arg CreateLedgerEventParams) (LedgerEvent, error) {
-	row := q.db.QueryRowContext(ctx, createLedgerEvent,
-		arg.Platform,
-		arg.PlatformUserID,
-		arg.UserID,
-		arg.EventType,
-		arg.AmountRaw,
-		arg.Message,
-		arg.TxHash,
-		arg.LogIndex,
-		arg.BlockTime,
-	)
-	var i LedgerEvent
-	err := row.Scan(
-		&i.ID,
-		&i.Platform,
-		&i.PlatformUserID,
-		&i.UserID,
-		&i.EventType,
-		&i.AmountRaw,
-		&i.Message,
-		&i.TxHash,
-		&i.LogIndex,
-		&i.BlockTime,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
+func (q *Queries) GetEarningsSummaryForUser(ctx context.Context, dollar_1 int64) (GetEarningsSummaryForUserRow, error) {
+	row := q.db.QueryRowContext(ctx, getEarningsSummaryForUser, dollar_1)
+	var i GetEarningsSummaryForUserRow
+	err := row.Scan(&i.EarnedRaw, &i.WithdrawnRaw, &i.PendingRaw)
 	return i, err
 }
 
-const getLedgerEventsByChannel = `-- name: GetLedgerEventsByChannel :many
-SELECT id, platform, platform_user_id, user_id, event_type, amount_raw, message, tx_hash, log_index, block_time, created_at, updated_at FROM ledger_events
-WHERE platform = $1 AND platform_user_id = $2
-ORDER BY block_time DESC
-LIMIT $3 OFFSET $4
-`
-
-type GetLedgerEventsByChannelParams struct {
-	Platform       string `json:"platform"`
-	PlatformUserID string `json:"platform_user_id"`
-	Limit          int32  `json:"limit"`
-	Offset         int32  `json:"offset"`
-}
-
-func (q *Queries) GetLedgerEventsByChannel(ctx context.Context, arg GetLedgerEventsByChannelParams) ([]LedgerEvent, error) {
-	rows, err := q.db.QueryContext(ctx, getLedgerEventsByChannel,
-		arg.Platform,
-		arg.PlatformUserID,
-		arg.Limit,
-		arg.Offset,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []LedgerEvent{}
-	for rows.Next() {
-		var i LedgerEvent
-		if err := rows.Scan(
-			&i.ID,
-			&i.Platform,
-			&i.PlatformUserID,
-			&i.UserID,
-			&i.EventType,
-			&i.AmountRaw,
-			&i.Message,
-			&i.TxHash,
-			&i.LogIndex,
-			&i.BlockTime,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const getLedgerEventsByUser = `-- name: GetLedgerEventsByUser :many
-SELECT id, platform, platform_user_id, user_id, event_type, amount_raw, message, tx_hash, log_index, block_time, created_at, updated_at FROM ledger_events
+const listTipsForUser = `-- name: ListTipsForUser :many
+SELECT
+  id, platform, platform_user_id, user_id, event_type, amount_raw, message,
+  tx_hash, log_index, block_time, created_at, updated_at
+FROM ledger_events
 WHERE user_id = $1
+  AND event_type IN ('TIP_DIRECT', 'TIP_ESCROW')
 ORDER BY block_time DESC
 LIMIT $2 OFFSET $3
 `
 
-type GetLedgerEventsByUserParams struct {
+type ListTipsForUserParams struct {
 	UserID sql.NullInt64 `json:"user_id"`
 	Limit  int32         `json:"limit"`
 	Offset int32         `json:"offset"`
 }
 
-func (q *Queries) GetLedgerEventsByUser(ctx context.Context, arg GetLedgerEventsByUserParams) ([]LedgerEvent, error) {
-	rows, err := q.db.QueryContext(ctx, getLedgerEventsByUser, arg.UserID, arg.Limit, arg.Offset)
+func (q *Queries) ListTipsForUser(ctx context.Context, arg ListTipsForUserParams) ([]LedgerEvent, error) {
+	rows, err := q.db.QueryContext(ctx, listTipsForUser, arg.UserID, arg.Limit, arg.Offset)
 	if err != nil {
 		return nil, err
 	}
@@ -190,24 +107,4 @@ func (q *Queries) GetLedgerEventsByUser(ctx context.Context, arg GetLedgerEvents
 		return nil, err
 	}
 	return items, nil
-}
-
-const sumEarningsByUser = `-- name: SumEarningsByUser :one
-SELECT
-  COALESCE(SUM(CASE WHEN event_type IN ('TIP_DIRECT','TIP_ESCROW') THEN amount_raw ELSE 0 END), 0) AS total_earned,
-  COALESCE(SUM(CASE WHEN event_type = 'WITHDRAW' THEN amount_raw ELSE 0 END), 0) AS total_withdrawn
-FROM ledger_events
-WHERE user_id = $1
-`
-
-type SumEarningsByUserRow struct {
-	TotalEarned    interface{} `json:"total_earned"`
-	TotalWithdrawn interface{} `json:"total_withdrawn"`
-}
-
-func (q *Queries) SumEarningsByUser(ctx context.Context, userID sql.NullInt64) (SumEarningsByUserRow, error) {
-	row := q.db.QueryRowContext(ctx, sumEarningsByUser, userID)
-	var i SumEarningsByUserRow
-	err := row.Scan(&i.TotalEarned, &i.TotalWithdrawn)
-	return i, err
 }

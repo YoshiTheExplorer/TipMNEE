@@ -7,25 +7,32 @@ package db
 
 import (
 	"context"
+	"database/sql"
 )
 
 const createSocialLink = `-- name: CreateSocialLink :one
 INSERT INTO social_links (
   user_id, platform, platform_user_id, verified_at, created_at, updated_at
 ) VALUES (
-  $1, $2, $3, NOW(), NOW(), NOW()
+  $1, $2, $3, $4, NOW(), NOW()
 )
 RETURNING id, user_id, platform, platform_user_id, verified_at, created_at, updated_at
 `
 
 type CreateSocialLinkParams struct {
-	UserID         int64  `json:"user_id"`
-	Platform       string `json:"platform"`
-	PlatformUserID string `json:"platform_user_id"`
+	UserID         int64        `json:"user_id"`
+	Platform       string       `json:"platform"`
+	PlatformUserID string       `json:"platform_user_id"`
+	VerifiedAt     sql.NullTime `json:"verified_at"`
 }
 
 func (q *Queries) CreateSocialLink(ctx context.Context, arg CreateSocialLinkParams) (SocialLink, error) {
-	row := q.db.QueryRowContext(ctx, createSocialLink, arg.UserID, arg.Platform, arg.PlatformUserID)
+	row := q.db.QueryRowContext(ctx, createSocialLink,
+		arg.UserID,
+		arg.Platform,
+		arg.PlatformUserID,
+		arg.VerifiedAt,
+	)
 	var i SocialLink
 	err := row.Scan(
 		&i.ID,
@@ -39,28 +46,20 @@ func (q *Queries) CreateSocialLink(ctx context.Context, arg CreateSocialLinkPara
 	return i, err
 }
 
-const deleteSocialLink = `-- name: DeleteSocialLink :exec
-DELETE FROM social_links WHERE id = $1
-`
-
-func (q *Queries) DeleteSocialLink(ctx context.Context, id int64) error {
-	_, err := q.db.ExecContext(ctx, deleteSocialLink, id)
-	return err
-}
-
-const getSocialLinkByPlatformUserID = `-- name: GetSocialLinkByPlatformUserID :one
-SELECT id, user_id, platform, platform_user_id, verified_at, created_at, updated_at FROM social_links
+const getSocialLinkByPlatformUser = `-- name: GetSocialLinkByPlatformUser :one
+SELECT id, user_id, platform, platform_user_id, verified_at, created_at, updated_at
+FROM social_links
 WHERE platform = $1 AND platform_user_id = $2
 LIMIT 1
 `
 
-type GetSocialLinkByPlatformUserIDParams struct {
+type GetSocialLinkByPlatformUserParams struct {
 	Platform       string `json:"platform"`
 	PlatformUserID string `json:"platform_user_id"`
 }
 
-func (q *Queries) GetSocialLinkByPlatformUserID(ctx context.Context, arg GetSocialLinkByPlatformUserIDParams) (SocialLink, error) {
-	row := q.db.QueryRowContext(ctx, getSocialLinkByPlatformUserID, arg.Platform, arg.PlatformUserID)
+func (q *Queries) GetSocialLinkByPlatformUser(ctx context.Context, arg GetSocialLinkByPlatformUserParams) (SocialLink, error) {
+	row := q.db.QueryRowContext(ctx, getSocialLinkByPlatformUser, arg.Platform, arg.PlatformUserID)
 	var i SocialLink
 	err := row.Scan(
 		&i.ID,
@@ -72,52 +71,4 @@ func (q *Queries) GetSocialLinkByPlatformUserID(ctx context.Context, arg GetSoci
 		&i.UpdatedAt,
 	)
 	return i, err
-}
-
-const listSocialLinksByUser = `-- name: ListSocialLinksByUser :many
-SELECT id, user_id, platform, platform_user_id, verified_at, created_at, updated_at FROM social_links
-WHERE user_id = $1
-ORDER BY created_at DESC
-`
-
-func (q *Queries) ListSocialLinksByUser(ctx context.Context, userID int64) ([]SocialLink, error) {
-	rows, err := q.db.QueryContext(ctx, listSocialLinksByUser, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []SocialLink{}
-	for rows.Next() {
-		var i SocialLink
-		if err := rows.Scan(
-			&i.ID,
-			&i.UserID,
-			&i.Platform,
-			&i.PlatformUserID,
-			&i.VerifiedAt,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const updateSocialLinkVerification = `-- name: UpdateSocialLinkVerification :exec
-UPDATE social_links
-SET verified_at = NOW(), updated_at = NOW()
-WHERE id = $1
-`
-
-func (q *Queries) UpdateSocialLinkVerification(ctx context.Context, id int64) error {
-	_, err := q.db.ExecContext(ctx, updateSocialLinkVerification, id)
-	return err
 }

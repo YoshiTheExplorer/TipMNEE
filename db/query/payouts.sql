@@ -1,26 +1,19 @@
--- name: CreatePayout :one
+-- name: UpsertPayout :one
 INSERT INTO payouts (
   user_id, chain, address, created_at, updated_at
 ) VALUES (
   $1, $2, $3, NOW(), NOW()
 )
-RETURNING *;
+ON CONFLICT (user_id, chain) DO UPDATE
+SET address = EXCLUDED.address,
+    updated_at = NOW()
+RETURNING id, user_id, chain, address, created_at, updated_at;
 
--- name: GetPayoutByUserAndChain :one
-SELECT * FROM payouts
-WHERE user_id = $1 AND chain = $2
+-- name: ResolvePayoutByChannelID :one
+SELECT p.address
+FROM social_links sl
+JOIN payouts p ON p.user_id = sl.user_id
+WHERE sl.platform = $1
+  AND sl.platform_user_id = $2
+  AND p.chain = $3
 LIMIT 1;
-
--- name: UpdatePayoutAddress :one
-UPDATE payouts
-SET address = $2, updated_at = NOW()
-WHERE user_id = $1 AND chain = 'ethereum'
-RETURNING *;
-
--- name: ListPayoutsByUser :many
-SELECT * FROM payouts
-WHERE user_id = $1
-ORDER BY created_at DESC;
-
--- name: DeletePayout :exec
-DELETE FROM payouts WHERE id = $1;

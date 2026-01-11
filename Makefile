@@ -1,39 +1,37 @@
+include .env
+export
+
+POSTGRES_CONTAINER=tipmnee-postgres
+MIGRATIONS_DIR=db/migrations
+
 postgres:
-	docker run --name tipmnee-postgres \
-		-p 5434:5432 \
-		-e POSTGRES_USER=root \
-		-e POSTGRES_PASSWORD=secret \
-		-e POSTGRES_DB=tipmnee \
+	docker run --name $(POSTGRES_CONTAINER) \
+		-p $(POSTGRES_PORT):5432 \
+		-e POSTGRES_USER=$(POSTGRES_USER) \
+		-e POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
+		-e POSTGRES_DB=$(POSTGRES_DB) \
 		-d postgres:12
 
 postgresrm:
-	docker rm -f tipmnee-postgres
+	docker rm -f $(POSTGRES_CONTAINER)
 
 dropdb:
-	docker exec -it tipmnee-postgres dropdb -U root tipmnee
+	docker exec -it $(POSTGRES_CONTAINER) dropdb -U $(POSTGRES_USER) $(POSTGRES_DB)
 
 createMigrations:
-	migrate create -ext sql -dir db/migrations -seq $(name)
+	migrate create -ext sql -dir $(MIGRATIONS_DIR) -seq $(name)
 
 migrateup:
-	migrate -path db/migrations \
-		-database "postgresql://root:secret@localhost:5434/tipmnee?sslmode=disable" \
-		-verbose up
+	migrate -path $(MIGRATIONS_DIR) -database "$(DB_SOURCE)" -verbose up
 
 migratedown:
-	migrate -path db/migrations \
-		-database "postgresql://root:secret@localhost:5434/tipmnee?sslmode=disable" \
-		-verbose down
-		
+	migrate -path $(MIGRATIONS_DIR) -database "$(DB_SOURCE)" -verbose down
+
 migrateup1:
-	migrate -path db/migrations \
-		-database "postgresql://root:secret@localhost:5434/tipmnee?sslmode=disable" \
-		-verbose up 1
+	migrate -path $(MIGRATIONS_DIR) -database "$(DB_SOURCE)" -verbose up 1
 
 migratedown1:
-	migrate -path db/migrations \
-		-database "postgresql://root:secret@localhost:5434/tipmnee?sslmode=disable" \
-		-verbose down 1
+	migrate -path $(MIGRATIONS_DIR) -database "$(DB_SOURCE)" -verbose down 1
 
 sqlc:
 	sqlc generate

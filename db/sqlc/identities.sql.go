@@ -38,28 +38,20 @@ func (q *Queries) CreateIdentity(ctx context.Context, arg CreateIdentityParams) 
 	return i, err
 }
 
-const deleteIdentity = `-- name: DeleteIdentity :exec
-DELETE FROM identities WHERE id = $1
-`
-
-func (q *Queries) DeleteIdentity(ctx context.Context, id int64) error {
-	_, err := q.db.ExecContext(ctx, deleteIdentity, id)
-	return err
-}
-
-const getIdentityByProviderAndUserID = `-- name: GetIdentityByProviderAndUserID :one
-SELECT id, user_id, provider, provider_user_id, created_at, updated_at FROM identities
+const getIdentity = `-- name: GetIdentity :one
+SELECT id, user_id, provider, provider_user_id, created_at, updated_at
+FROM identities
 WHERE provider = $1 AND provider_user_id = $2
 LIMIT 1
 `
 
-type GetIdentityByProviderAndUserIDParams struct {
+type GetIdentityParams struct {
 	Provider       string `json:"provider"`
 	ProviderUserID string `json:"provider_user_id"`
 }
 
-func (q *Queries) GetIdentityByProviderAndUserID(ctx context.Context, arg GetIdentityByProviderAndUserIDParams) (Identity, error) {
-	row := q.db.QueryRowContext(ctx, getIdentityByProviderAndUserID, arg.Provider, arg.ProviderUserID)
+func (q *Queries) GetIdentity(ctx context.Context, arg GetIdentityParams) (Identity, error) {
+	row := q.db.QueryRowContext(ctx, getIdentity, arg.Provider, arg.ProviderUserID)
 	var i Identity
 	err := row.Scan(
 		&i.ID,
@@ -73,8 +65,10 @@ func (q *Queries) GetIdentityByProviderAndUserID(ctx context.Context, arg GetIde
 }
 
 const listIdentitiesByUser = `-- name: ListIdentitiesByUser :many
-SELECT id, user_id, provider, provider_user_id, created_at, updated_at FROM identities
+SELECT id, user_id, provider, provider_user_id, created_at, updated_at
+FROM identities
 WHERE user_id = $1
+ORDER BY id DESC
 `
 
 func (q *Queries) ListIdentitiesByUser(ctx context.Context, userID int64) ([]Identity, error) {

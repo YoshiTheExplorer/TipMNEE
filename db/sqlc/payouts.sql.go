@@ -9,119 +9,49 @@ import (
 	"context"
 )
 
-const createPayout = `-- name: CreatePayout :one
+const resolvePayoutByChannelID = `-- name: ResolvePayoutByChannelID :one
+SELECT p.address
+FROM social_links sl
+JOIN payouts p ON p.user_id = sl.user_id
+WHERE sl.platform = $1
+  AND sl.platform_user_id = $2
+  AND p.chain = $3
+LIMIT 1
+`
+
+type ResolvePayoutByChannelIDParams struct {
+	Platform       string `json:"platform"`
+	PlatformUserID string `json:"platform_user_id"`
+	Chain          string `json:"chain"`
+}
+
+func (q *Queries) ResolvePayoutByChannelID(ctx context.Context, arg ResolvePayoutByChannelIDParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, resolvePayoutByChannelID, arg.Platform, arg.PlatformUserID, arg.Chain)
+	var address string
+	err := row.Scan(&address)
+	return address, err
+}
+
+const upsertPayout = `-- name: UpsertPayout :one
 INSERT INTO payouts (
   user_id, chain, address, created_at, updated_at
 ) VALUES (
   $1, $2, $3, NOW(), NOW()
 )
+ON CONFLICT (user_id, chain) DO UPDATE
+SET address = EXCLUDED.address,
+    updated_at = NOW()
 RETURNING id, user_id, chain, address, created_at, updated_at
 `
 
-type CreatePayoutParams struct {
+type UpsertPayoutParams struct {
 	UserID  int64  `json:"user_id"`
 	Chain   string `json:"chain"`
 	Address string `json:"address"`
 }
 
-func (q *Queries) CreatePayout(ctx context.Context, arg CreatePayoutParams) (Payout, error) {
-	row := q.db.QueryRowContext(ctx, createPayout, arg.UserID, arg.Chain, arg.Address)
-	var i Payout
-	err := row.Scan(
-		&i.ID,
-		&i.UserID,
-		&i.Chain,
-		&i.Address,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const deletePayout = `-- name: DeletePayout :exec
-DELETE FROM payouts WHERE id = $1
-`
-
-func (q *Queries) DeletePayout(ctx context.Context, id int64) error {
-	_, err := q.db.ExecContext(ctx, deletePayout, id)
-	return err
-}
-
-const getPayoutByUserAndChain = `-- name: GetPayoutByUserAndChain :one
-SELECT id, user_id, chain, address, created_at, updated_at FROM payouts
-WHERE user_id = $1 AND chain = $2
-LIMIT 1
-`
-
-type GetPayoutByUserAndChainParams struct {
-	UserID int64  `json:"user_id"`
-	Chain  string `json:"chain"`
-}
-
-func (q *Queries) GetPayoutByUserAndChain(ctx context.Context, arg GetPayoutByUserAndChainParams) (Payout, error) {
-	row := q.db.QueryRowContext(ctx, getPayoutByUserAndChain, arg.UserID, arg.Chain)
-	var i Payout
-	err := row.Scan(
-		&i.ID,
-		&i.UserID,
-		&i.Chain,
-		&i.Address,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const listPayoutsByUser = `-- name: ListPayoutsByUser :many
-SELECT id, user_id, chain, address, created_at, updated_at FROM payouts
-WHERE user_id = $1
-ORDER BY created_at DESC
-`
-
-func (q *Queries) ListPayoutsByUser(ctx context.Context, userID int64) ([]Payout, error) {
-	rows, err := q.db.QueryContext(ctx, listPayoutsByUser, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []Payout{}
-	for rows.Next() {
-		var i Payout
-		if err := rows.Scan(
-			&i.ID,
-			&i.UserID,
-			&i.Chain,
-			&i.Address,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const updatePayoutAddress = `-- name: UpdatePayoutAddress :one
-UPDATE payouts
-SET address = $2, updated_at = NOW()
-WHERE user_id = $1 AND chain = 'ethereum'
-RETURNING id, user_id, chain, address, created_at, updated_at
-`
-
-type UpdatePayoutAddressParams struct {
-	UserID  int64  `json:"user_id"`
-	Address string `json:"address"`
-}
-
-func (q *Queries) UpdatePayoutAddress(ctx context.Context, arg UpdatePayoutAddressParams) (Payout, error) {
-	row := q.db.QueryRowContext(ctx, updatePayoutAddress, arg.UserID, arg.Address)
+func (q *Queries) UpsertPayout(ctx context.Context, arg UpsertPayoutParams) (Payout, error) {
+	row := q.db.QueryRowContext(ctx, upsertPayout, arg.UserID, arg.Chain, arg.Address)
 	var i Payout
 	err := row.Scan(
 		&i.ID,
