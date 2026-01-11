@@ -41,12 +41,16 @@ func NewServer(store *db.Queries) *Server {
 	// Public routes
 	public := s.router.Group("/api")
 	{
-		// Auth (public)
-		public.POST("/auth/wallet", identitiesH.LoginWithWallet)
-		public.POST("/auth/google", identitiesH.LoginWithGoogle) // TODO verify Google ID token
-
 		// Resolve (public) - used by extension
 		public.GET("/resolve/youtube/:channelId", payoutsH.ResolveYouTubeChannelPayout)
+	}
+
+	// Auth routes
+	auth := s.router.Group("/api/auth")
+	{
+		auth.POST("/wallet/message", identitiesH.GetWalletLoginMessage)
+		auth.POST("/wallet", identitiesH.LoginWithWallet)
+		auth.POST("/google", identitiesH.LoginWithGoogle)
 	}
 
 	// Protected routes

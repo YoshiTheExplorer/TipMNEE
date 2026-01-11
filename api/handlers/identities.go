@@ -1,15 +1,19 @@
 package handlers
 
 import (
+	"crypto/rand"
+	"database/sql"
+	"encoding/base64"
 	"net/http"
 	"strings"
 	"time"
 
 	db "github.com/YoshiTheExplorer/TipMNEE/db/sqlc"
-
+	util "github.com/YoshiTheExplorer/TipMNEE/util"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 )
+
 
 type IdentitiesHandler struct {
 	store     *db.Queries
@@ -45,10 +49,65 @@ Wallet login MVP:
 - You SHOULD verify signature. For hackathon, you can start with "trust address" (not secure).
 - Better: implement EIP-191 / personal_sign verification using go-ethereum crypto.
 */
+type walletMessageReq struct {
+	Address string `json:"address" binding:"required"`
+}
+
+type walletMessageResp struct {
+	Message string `json:"message"`
+}
+
+func generateNonce() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+func (h *IdentitiesHandler) GetWalletLoginMessage(c *gin.Context) {
+	var req walletMessageReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	addr := strings.ToLower(strings.TrimSpace(req.Address))
+	if addr == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "address required"})
+		return
+	}
+
+	nonce, err := generateNonce()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate nonce"})
+		return
+	}
+
+	expires := time.Now().Add(10 * time.Minute)
+
+	ctx := c.Request.Context()
+	if err := h.store.UpsertLoginNonce(ctx, db.UpsertLoginNonceParams{
+		Address:   addr,
+		Nonce:     nonce,
+		ExpiresAt: expires,
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to store nonce"})
+		return
+	}
+
+	message := "TipMNEE wants you to sign in with your Ethereum account.\n\n" +
+		"Address: " + addr + "\n" +
+		"Nonce: " + nonce + "\n" +
+		"Expires: " + expires.UTC().Format(time.RFC3339)
+
+	c.JSON(http.StatusOK, walletMessageResp{Message: message})
+}
+
 type walletLoginReq struct {
-	Address   string `json:"address" binding:"required"`
-	Signature string `json:"signature"` // TODO verify
-	Message   string `json:"message"`   // TODO verify
+  Address   string `json:"address" binding:"required"`
+  Signature string `json:"signature" binding:"required"`
+  Message   string `json:"message" binding:"required"`
 }
 
 func (h *IdentitiesHandler) LoginWithWallet(c *gin.Context) {
@@ -64,11 +123,48 @@ func (h *IdentitiesHandler) LoginWithWallet(c *gin.Context) {
 		return
 	}
 
-	// TODO: verify signature here (recommended). For now, just proceed.
-
 	ctx := c.Request.Context()
 
-	// 1) identity exists?
+	// 1) Must have a nonce issued for this address (forces /auth/wallet/message first)
+	ln, err := h.store.GetLoginNonce(ctx, addr)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "missing nonce: call /api/auth/wallet/message first"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read nonce"})
+		return
+	}
+
+	// 2) Check expiry
+	if time.Now().After(ln.ExpiresAt) {
+		_ = h.store.DeleteLoginNonce(ctx, addr)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "nonce expired: call /api/auth/wallet/message again"})
+		return
+	}
+
+	// 3) Message must include the nonce we issued
+	if !strings.Contains(req.Message, "Nonce: "+ln.Nonce) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid login message"})
+		return
+	}
+
+	// 4) Recover address from signature and ensure it matches claimed address
+	recovered, err := util.RecoverAddressFromPersonalSign(req.Message, req.Signature)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid signature"})
+		return
+	}
+	if recovered != addr {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "signature does not match address"})
+		return
+	}
+
+	// 5) One-time use nonce (prevents replay)
+	_ = h.store.DeleteLoginNonce(ctx, addr)
+
+	// ---- existing logic unchanged below ----
+
 	ident, err := h.store.GetIdentity(ctx, db.GetIdentityParams{
 		Provider:       "wallet",
 		ProviderUserID: addr,
@@ -78,7 +174,6 @@ func (h *IdentitiesHandler) LoginWithWallet(c *gin.Context) {
 	if err == nil {
 		userID = ident.UserID
 	} else {
-		// 2) create user + identity
 		u, err2 := h.store.CreateUser(ctx)
 		if err2 != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create user"})
