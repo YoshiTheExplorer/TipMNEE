@@ -72,6 +72,10 @@ func NewServer(store *db.Queries) *Server {
 	// Public routes
 	public := s.router.Group("/api")
 	{
+		// Discovery
+		configH := handlers.NewConfigHandler()
+		public.GET("/config", configH.GetConfig)
+
 		// Resolve (public) - used by extension
 		public.GET("/resolve/youtube/:channelId", payoutsH.ResolveYouTubeChannelPayout)
 

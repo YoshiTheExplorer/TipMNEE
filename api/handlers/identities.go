@@ -209,23 +209,33 @@ func (h *IdentitiesHandler) LoginWithWallet(c *gin.Context) {
 	if err == nil {
 		userID = ident.UserID
 	} else {
+		// Race protection: Try to create user and identity
 		u, err2 := h.store.CreateUser(ctx)
 		if err2 != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create user"})
 			return
 		}
 
-		_, err2 = h.store.CreateIdentity(ctx, db.CreateIdentityParams{
+		ident, err2 = h.store.CreateIdentity(ctx, db.CreateIdentityParams{
 			UserID:         u.ID,
 			Provider:       "wallet",
 			ProviderUserID: addr,
 		})
 		if err2 != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create identity"})
-			return
+			// If creation failed, it's likely a race: someone else created it.
+			// Try fetching one last time.
+			ident2, err3 := h.store.GetIdentity(ctx, db.GetIdentityParams{
+				Provider:       "wallet",
+				ProviderUserID: addr,
+			})
+			if err3 != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create identity"})
+				return
+			}
+			userID = ident2.UserID
+		} else {
+			userID = u.ID
 		}
-
-		userID = u.ID
 	}
 
 	token, err := h.mintJWT(userID)

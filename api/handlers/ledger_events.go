@@ -21,10 +21,6 @@ func NewLedgerEventsHandler(store *db.Queries) *LedgerEventsHandler {
 
 func (h *LedgerEventsHandler) GetEarningsSummary(c *gin.Context) {
 	userID := middleware.MustUserID(c)
-	if userID == 0 {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "not authenticated"})
-		return
-	}
 
 	ctx := c.Request.Context()
 	summary, err := h.store.GetEarningsSummaryForUser(ctx, userID)
@@ -38,10 +34,6 @@ func (h *LedgerEventsHandler) GetEarningsSummary(c *gin.Context) {
 
 func (h *LedgerEventsHandler) ListMyTips(c *gin.Context) {
 	userID := middleware.MustUserID(c)
-	if userID == 0 {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "not authenticated"})
-		return
-	}
 
 	limit := int32(50)
 	offset := int32(0)
