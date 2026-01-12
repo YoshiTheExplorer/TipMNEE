@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	db "github.com/YoshiTheExplorer/TipMNEE/db/sqlc"
 
@@ -17,13 +18,32 @@ type Server struct {
 	store     *db.Queries
 	router    *gin.Engine
 	jwtSecret string
+	googleAudiences []string
 }
+
+func parseCSVEnv(key string) []string {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" { return nil }
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" { out = append(out, p) }
+	}
+	return out
+ }
 
 func NewServer(store *db.Queries) *Server {
 	s := &Server{
 		store:     store,
 		router:    gin.New(),
 		jwtSecret: os.Getenv("JWT_SECRET"),
+		googleAudiences: func() []string {
+			if auds := parseCSVEnv("GOOGLE_CLIENT_IDS"); len(auds) > 0 {
+				return auds
+			}
+			return parseCSVEnv("GOOGLE_CLIENT_ID")
+		}(),
 	}
 
 	// Global middleware
@@ -34,7 +54,7 @@ func NewServer(store *db.Queries) *Server {
 
 	// Instantiate handlers
 	usersH := handlers.NewUsersHandler(store)
-	identitiesH := handlers.NewIdentitiesHandler(store, s.jwtSecret)
+	identitiesH := handlers.NewIdentitiesHandler(store, s.jwtSecret, s.googleAudiences)
 	socialH := handlers.NewSocialLinksHandler(store)
 	payoutsH := handlers.NewPayoutsHandler(store)
 	ledgerH := handlers.NewLedgerEventsHandler(store)
