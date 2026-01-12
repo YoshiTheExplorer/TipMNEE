@@ -6,11 +6,9 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
-	"cloud.google.com/go/auth/credentials/idtoken"
 	db "github.com/YoshiTheExplorer/TipMNEE/db/sqlc"
 	util "github.com/YoshiTheExplorer/TipMNEE/util"
 	"github.com/gin-gonic/gin"
@@ -21,25 +19,32 @@ import (
 type IdentitiesHandler struct {
 	store     *db.Queries
 	jwtSecret string
-	googleAudiences []string
+	//Audiences []string
 }
 
-func NewIdentitiesHandler(store *db.Queries, jwtSecret string, googleAudiences []string) *IdentitiesHandler {
-	raw := strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_IDS"))
-	if raw == "" {
-		raw = strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_ID"))
-	}
-	var auds []string
-	for _, a := range strings.Split(raw, ",") {
-		a = strings.TrimSpace(a)
-		if a != "" {
-			auds = append(auds, a)
-		}
-	}
+// func NewIdentitiesHandler(store *db.Queries, jwtSecret string, googleAudiences []string) *IdentitiesHandler {
+// 	raw := strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_IDS"))
+// 	if raw == "" {
+// 		raw = strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_ID"))
+// 	}
+// 	var auds []string
+// 	for _, a := range strings.Split(raw, ",") {
+// 		a = strings.TrimSpace(a)
+// 		if a != "" {
+// 			auds = append(auds, a)
+// 		}
+// 	}
+// 	return &IdentitiesHandler{
+// 		store:           store,
+// 		jwtSecret:       jwtSecret,
+// 		googleAudiences: auds,
+// 	}
+// }
+
+func NewIdentitiesHandler(store *db.Queries, jwtSecret string) *IdentitiesHandler {
 	return &IdentitiesHandler{
-		store:           store,
-		jwtSecret:       jwtSecret,
-		googleAudiences: auds,
+		store:     store,
+		jwtSecret: jwtSecret,
 	}
 }
 
@@ -232,97 +237,148 @@ func (h *IdentitiesHandler) LoginWithWallet(c *gin.Context) {
 	c.JSON(http.StatusOK, loginResp{AccessToken: token, UserID: userID})
 }
 
-type googleLoginReq struct {
-	IDToken string `json:"id_token" binding:"required"`
-}
+// type googleLoginReq struct {
+//   IDToken     string `json:"id_token"`
+//   AccessToken string `json:"access_token"`
+// }
 
-func (h *IdentitiesHandler) validateGoogleIDToken(c *gin.Context, raw string) (*idtoken.Payload, error) {
-	// idtoken.Validate requires an "audience" string. If you have multiple client IDs
-	// (web + extension), we try each.
-	if len(h.googleAudiences) == 0 {
-		return nil, fmt.Errorf("missing GOOGLE_CLIENT_ID(S)")
-	}
+// func (h *IdentitiesHandler) validateGoogleIDToken(c *gin.Context, raw string) (*idtoken.Payload, error) {
+// 	// idtoken.Validate requires an "audience" string. If you have multiple client IDs
+// 	// (web + extension), we try each.
+// 	if len(h.googleAudiences) == 0 {
+// 		return nil, fmt.Errorf("missing GOOGLE_CLIENT_ID(S)")
+// 	}
 
-	ctx := c.Request.Context()
-	var lastErr error
-	for _, aud := range h.googleAudiences {
-		p, err := idtoken.Validate(ctx, raw, aud)
-		if err == nil {
-			return p, nil
-		}
-		lastErr = err
-	}
-	return nil, lastErr
-}
+// 	ctx := c.Request.Context()
+// 	var lastErr error
+// 	for _, aud := range h.googleAudiences {
+// 		p, err := idtoken.Validate(ctx, raw, aud)
+// 		if err == nil {
+// 			return p, nil
+// 		}
+// 		lastErr = err
+// 	}
+// 	return nil, lastErr
+// }
 
-/*
-Google login:
-- Verify ID token, extract "sub".
-- Then same logic as wallet:
-  identities(provider='google', provider_user_id=sub)
-*/
-func (h *IdentitiesHandler) LoginWithGoogle(c *gin.Context) {
-	var req googleLoginReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
+// /*
+// Google login:
+// - Verify ID token, extract "sub".
+// - Then same logic as wallet:
+//   identities(provider='google', provider_user_id=sub)
+// */
+// func (h *IdentitiesHandler) LoginWithGoogle(c *gin.Context) {
+// 	var req googleLoginReq
+// 	if err := c.ShouldBindJSON(&req); err != nil {
+// 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+// 		return
+// 	}
 
-	payload, err := h.validateGoogleIDToken(c, strings.TrimSpace(req.IDToken))
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid google id_token"})
-		return
-	}
+// 	req.IDToken = strings.TrimSpace(req.IDToken)
+// 	req.AccessToken = strings.TrimSpace(req.AccessToken)
 
-	sub := strings.TrimSpace(payload.Subject)
-	if sub == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "google token missing subject"})
-		return
-	}
+// 	var sub string
 
-	ctx := c.Request.Context()
+// 	switch {
+// 	case req.IDToken != "":
+// 		payload, err := h.validateGoogleIDToken(c, req.IDToken)
+// 		if err != nil {
+// 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid google id_token"})
+// 		return
+// 		}
+// 		sub = strings.TrimSpace(payload.Subject)
 
-	ident, err := h.store.GetIdentity(ctx, db.GetIdentityParams{
-		Provider:       "google",
-		ProviderUserID: sub,
-	})
+// 	case req.AccessToken != "":
+// 		// OIDC userinfo: get stable subject ("sub") from access token
+// 		ui, err := fetchGoogleUserInfo(c.Request.Context(), req.AccessToken)
+// 		if err != nil {
+// 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid google access_token"})
+// 		return
+// 		}
+// 		sub = strings.TrimSpace(ui.Sub)
 
-	var userID int64
-	if err == nil {
-		userID = ident.UserID
-	} else {
-		u, err2 := h.store.CreateUser(ctx)
-		if err2 != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create user"})
-			return
-		}
+// 	default:
+// 		c.JSON(http.StatusBadRequest, gin.H{"error": "provide id_token or access_token"})
+// 		return
+// 	}
 
-		_, err2 = h.store.CreateIdentity(ctx, db.CreateIdentityParams{
-			UserID:         u.ID,
-			Provider:       "google",
-			ProviderUserID: sub,
-		})
-		if err2 != nil {
-			// Handle race: if identity was created concurrently, fetch it again.
-			ident2, err3 := h.store.GetIdentity(ctx, db.GetIdentityParams{
-				Provider:       "google",
-				ProviderUserID: sub,
-			})
-			if err3 != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create identity"})
-				return
-			}
-			userID = ident2.UserID
-		} else {
-			userID = u.ID
-		}
-	}
+// 	if sub == "" {
+// 		c.JSON(http.StatusUnauthorized, gin.H{"error": "google token missing subject"})
+// 		return
+// 	}
 
-	token, err := h.mintJWT(userID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to mint token"})
-		return
-	}
+// 	ctx := c.Request.Context()
 
-	c.JSON(http.StatusOK, loginResp{AccessToken: token, UserID: userID})
-}
+// 	ident, err := h.store.GetIdentity(ctx, db.GetIdentityParams{
+// 		Provider:       "google",
+// 		ProviderUserID: sub,
+// 	})
+
+// 	var userID int64
+// 	if err == nil {
+// 		userID = ident.UserID
+// 	} else {
+// 		u, err2 := h.store.CreateUser(ctx)
+// 		if err2 != nil {
+// 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create user"})
+// 			return
+// 		}
+
+// 		_, err2 = h.store.CreateIdentity(ctx, db.CreateIdentityParams{
+// 			UserID:         u.ID,
+// 			Provider:       "google",
+// 			ProviderUserID: sub,
+// 		})
+// 		if err2 != nil {
+// 			// Handle race: if identity was created concurrently, fetch it again.
+// 			ident2, err3 := h.store.GetIdentity(ctx, db.GetIdentityParams{
+// 				Provider:       "google",
+// 				ProviderUserID: sub,
+// 			})
+// 			if err3 != nil {
+// 				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create identity"})
+// 				return
+// 			}
+// 			userID = ident2.UserID
+// 		} else {
+// 			userID = u.ID
+// 		}
+// 	}
+
+// 	token, err := h.mintJWT(userID)
+// 	if err != nil {
+// 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to mint token"})
+// 		return
+// 	}
+
+// 	c.JSON(http.StatusOK, loginResp{AccessToken: token, UserID: userID})
+// }
+
+// type googleUserInfo struct {
+//   Sub   string `json:"sub"`
+//   Email string `json:"email,omitempty"`
+//   Name  string `json:"name,omitempty"`
+// }
+
+// func fetchGoogleUserInfo(ctx context.Context, accessToken string) (*googleUserInfo, error) {
+//   req, _ := http.NewRequestWithContext(ctx, "GET",
+//     "https://openidconnect.googleapis.com/v1/userinfo", nil,
+//   )
+//   req.Header.Set("Authorization", "Bearer "+accessToken)
+
+//   resp, err := http.DefaultClient.Do(req)
+//   if err != nil {
+//     return nil, err
+//   }
+//   defer resp.Body.Close()
+
+//   if resp.StatusCode != 200 {
+//     return nil, fmt.Errorf("userinfo status %d", resp.StatusCode)
+//   }
+
+//   var out googleUserInfo
+//   if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+//     return nil, err
+//   }
+//   return &out, nil
+// }
