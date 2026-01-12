@@ -103,31 +103,31 @@ func (h *SocialLinksHandler) VerifyYouTubeChannel(c *gin.Context) {
 
 	channelID := strings.TrimSpace(req.ChannelID)
 	accessToken := strings.TrimSpace(req.AccessToken)
-	if channelID == "" || accessToken == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "channel_id and access_token required"})
-		return
-	}
-
+	
 	ctx := c.Request.Context()
 
-	// Takeover protection
+	// 1. Check DB for existing link (stores result in 'err')
 	existing, err := h.store.GetSocialLinkByPlatformUser(ctx, db.GetSocialLinkByPlatformUserParams{
 		Platform:       "youtube",
 		PlatformUserID: channelID,
 	})
+    
+    // SAFETY: Catch real DB errors (not just 'no rows')
 	if err != nil && err != sql.ErrNoRows {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read existing link"})
-		return
-	}
-	if err == nil && existing.UserID != userID {
-		c.JSON(http.StatusConflict, gin.H{"error": "channel already linked to another user"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read existing link from DB"})
 		return
 	}
 
-	// OAuth ownership check
-	ok, err := verifyYouTubeOwnership(ctx, accessToken, channelID)
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+    // 2. Takeover protection
+	if err == nil && existing.UserID != userID && existing.VerifiedAt.Valid {
+		c.JSON(http.StatusConflict, gin.H{"error": "channel already verified by another user"})
+		return
+	}
+
+	// 3. OAuth ownership check (uses 'verifyErr' so we don't overwrite 'err')
+	ok, verifyErr := verifyYouTubeOwnership(ctx, accessToken, channelID)
+	if verifyErr != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": verifyErr.Error()})
 		return
 	}
 	if !ok {
@@ -137,9 +137,9 @@ func (h *SocialLinksHandler) VerifyYouTubeChannel(c *gin.Context) {
 
 	now := time.Now()
 
-    // Mark verified, with takeover if the existing record is UNVERIFIED and owned by someone else.
+    // 4. Use the ORIGINAL 'err' from step 1 to decide what to do
     if err == sql.ErrNoRows {
-        // No existing link: create as verified
+        // NO existing link: finally CreateSocialLink will be called!
         if _, err := h.store.CreateSocialLink(ctx, db.CreateSocialLinkParams{
             UserID:         userID,
             Platform:       "youtube",
@@ -150,9 +150,8 @@ func (h *SocialLinksHandler) VerifyYouTubeChannel(c *gin.Context) {
             return
         }
     } else {
-        // Existing link found
+        // Existing link found (err was nil)
         if existing.UserID == userID {
-            // Same user: just ensure verified_at is set
             if !existing.VerifiedAt.Valid {
                 if _, err := h.store.UpdateSocialLinkVerifiedAt(ctx, db.UpdateSocialLinkVerifiedAtParams{
                     ID:         existing.ID,
@@ -163,7 +162,7 @@ func (h *SocialLinksHandler) VerifyYouTubeChannel(c *gin.Context) {
                 }
             }
         } else {
-            // Different user, but NOT verified (checked above) => TAKEOVER + verify
+            // Takeover + verify
             if _, err := h.store.TransferSocialLinkToUser(ctx, db.TransferSocialLinkToUserParams{
                 ID:         existing.ID,
                 UserID:     userID,
@@ -175,7 +174,7 @@ func (h *SocialLinksHandler) VerifyYouTubeChannel(c *gin.Context) {
         }
     }
 
-	// Backfill ledger only after verification
+	// Backfill ledger
 	_ = h.store.BackfillLedgerEventsUserIDForChannel(ctx, db.BackfillLedgerEventsUserIDForChannelParams{
 		UserID:         sql.NullInt64{Int64: userID, Valid: true},
 		Platform:       "youtube",

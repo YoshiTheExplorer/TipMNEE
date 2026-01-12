@@ -15,6 +15,9 @@ postgres:
 postgresrm:
 	docker rm -f $(POSTGRES_CONTAINER)
 
+createdb:
+	docker exec -it postgres12 createdb -U root $(POSTGRES_DB)
+
 dropdb:
 	docker exec -it $(POSTGRES_CONTAINER) dropdb -U $(POSTGRES_USER) $(POSTGRES_DB)
 
