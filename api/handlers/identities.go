@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -54,6 +55,7 @@ type walletMessageReq struct {
 }
 
 type walletMessageResp struct {
+	Address string `json:"address"`
 	Message string `json:"message"`
 }
 
@@ -63,6 +65,15 @@ func generateNonce() (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+func walletLoginMessage(addr, nonce string, expires time.Time) string {
+	return fmt.Sprintf(
+		"TipMNEE wants you to sign in with your Ethereum account.\n\nAddress: %s\nNonce: %s\nExpires: %s",
+		addr,
+		nonce,
+		expires.UTC().Format(time.RFC3339),
+	)
 }
 
 func (h *IdentitiesHandler) GetWalletLoginMessage(c *gin.Context) {
@@ -84,30 +95,27 @@ func (h *IdentitiesHandler) GetWalletLoginMessage(c *gin.Context) {
 		return
 	}
 
-	expires := time.Now().Add(10 * time.Minute)
+	expires := time.Now().UTC().Add(10 * time.Minute).Truncate(time.Second)
+
+	message := walletLoginMessage(addr, nonce, expires)
 
 	ctx := c.Request.Context()
 	if err := h.store.UpsertLoginNonce(ctx, db.UpsertLoginNonceParams{
 		Address:   addr,
 		Nonce:     nonce,
 		ExpiresAt: expires,
+		Message:   message,
 	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to store nonce"})
 		return
 	}
 
-	message := "TipMNEE wants you to sign in with your Ethereum account.\n\n" +
-		"Address: " + addr + "\n" +
-		"Nonce: " + nonce + "\n" +
-		"Expires: " + expires.UTC().Format(time.RFC3339)
-
-	c.JSON(http.StatusOK, walletMessageResp{Message: message})
+	c.JSON(http.StatusOK, walletMessageResp{Address: addr, Message: message})
 }
 
 type walletLoginReq struct {
   Address   string `json:"address" binding:"required"`
   Signature string `json:"signature" binding:"required"`
-  Message   string `json:"message" binding:"required"`
 }
 
 func (h *IdentitiesHandler) LoginWithWallet(c *gin.Context) {
@@ -136,31 +144,35 @@ func (h *IdentitiesHandler) LoginWithWallet(c *gin.Context) {
 		return
 	}
 
-	// 2) Check expiry
-	if time.Now().After(ln.ExpiresAt) {
+	// 2) Check expiry (UTC + seconds)
+	now := time.Now().UTC().Truncate(time.Second)
+	if now.After(ln.ExpiresAt.UTC().Truncate(time.Second)) {
 		_ = h.store.DeleteLoginNonce(ctx, addr)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "nonce expired: call /api/auth/wallet/message again"})
 		return
 	}
 
-	// 3) Message must include the nonce we issued
-	if !strings.Contains(req.Message, "Nonce: "+ln.Nonce) {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid login message"})
-		return
-	}
-
-	// 4) Recover address from signature and ensure it matches claimed address
-	recovered, err := util.RecoverAddressFromPersonalSign(req.Message, req.Signature)
+	// 3) Verify signature against the exact stored message
+	recovered, err := util.RecoverAddressFromPersonalSign(ln.Message, req.Signature)
 	if err != nil {
+		_ = h.store.DeleteLoginNonce(ctx, addr) // optional but good
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid signature"})
 		return
 	}
-	if recovered != addr {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "signature does not match address"})
+
+	expected := strings.ToLower(strings.TrimSpace(ln.Address))
+	if strings.ToLower(strings.TrimSpace(recovered)) != expected {
+		_ = h.store.DeleteLoginNonce(ctx, addr) // optional but good
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error":     "signature does not match address",
+			"recovered": recovered,
+			"expected":  expected,
+			"canonical": ln.Message, // debug only; remove later
+		})
 		return
 	}
 
-	// 5) One-time use nonce (prevents replay)
+	// 4) One-time use nonce (prevents replay)
 	_ = h.store.DeleteLoginNonce(ctx, addr)
 
 	// ---- existing logic unchanged below ----

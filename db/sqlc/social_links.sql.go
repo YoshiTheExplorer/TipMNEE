@@ -72,3 +72,63 @@ func (q *Queries) GetSocialLinkByPlatformUser(ctx context.Context, arg GetSocial
 	)
 	return i, err
 }
+
+const transferSocialLinkToUser = `-- name: TransferSocialLinkToUser :one
+UPDATE social_links
+SET
+  user_id = $2,
+  verified_at = $3,
+  updated_at = NOW()
+WHERE id = $1
+RETURNING id, user_id, platform, platform_user_id, verified_at, created_at, updated_at
+`
+
+type TransferSocialLinkToUserParams struct {
+	ID         int64        `json:"id"`
+	UserID     int64        `json:"user_id"`
+	VerifiedAt sql.NullTime `json:"verified_at"`
+}
+
+func (q *Queries) TransferSocialLinkToUser(ctx context.Context, arg TransferSocialLinkToUserParams) (SocialLink, error) {
+	row := q.db.QueryRowContext(ctx, transferSocialLinkToUser, arg.ID, arg.UserID, arg.VerifiedAt)
+	var i SocialLink
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Platform,
+		&i.PlatformUserID,
+		&i.VerifiedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateSocialLinkVerifiedAt = `-- name: UpdateSocialLinkVerifiedAt :one
+UPDATE social_links
+SET
+  verified_at = $2,
+  updated_at = NOW()
+WHERE id = $1
+RETURNING id, user_id, platform, platform_user_id, verified_at, created_at, updated_at
+`
+
+type UpdateSocialLinkVerifiedAtParams struct {
+	ID         int64        `json:"id"`
+	VerifiedAt sql.NullTime `json:"verified_at"`
+}
+
+func (q *Queries) UpdateSocialLinkVerifiedAt(ctx context.Context, arg UpdateSocialLinkVerifiedAtParams) (SocialLink, error) {
+	row := q.db.QueryRowContext(ctx, updateSocialLinkVerifiedAt, arg.ID, arg.VerifiedAt)
+	var i SocialLink
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Platform,
+		&i.PlatformUserID,
+		&i.VerifiedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}

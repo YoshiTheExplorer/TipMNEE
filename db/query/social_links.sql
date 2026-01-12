@@ -11,3 +11,20 @@ INSERT INTO social_links (
   $1, $2, $3, $4, NOW(), NOW()
 )
 RETURNING id, user_id, platform, platform_user_id, verified_at, created_at, updated_at;
+
+-- name: UpdateSocialLinkVerifiedAt :one
+UPDATE social_links
+SET
+  verified_at = $2,
+  updated_at = NOW()
+WHERE id = $1
+RETURNING id, user_id, platform, platform_user_id, verified_at, created_at, updated_at;
+
+-- name: TransferSocialLinkToUser :one
+UPDATE social_links
+SET
+  user_id = $2,
+  verified_at = $3,
+  updated_at = NOW()
+WHERE id = $1
+RETURNING id, user_id, platform, platform_user_id, verified_at, created_at, updated_at;

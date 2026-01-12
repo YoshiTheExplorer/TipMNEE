@@ -46,6 +46,7 @@ type LoginNonce struct {
 	Nonce     string    `json:"nonce"`
 	ExpiresAt time.Time `json:"expires_at"`
 	CreatedAt time.Time `json:"created_at"`
+	Message   string    `json:"message"`
 }
 
 type Payout struct {

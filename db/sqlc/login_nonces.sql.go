@@ -21,39 +21,55 @@ func (q *Queries) DeleteLoginNonce(ctx context.Context, address string) error {
 }
 
 const getLoginNonce = `-- name: GetLoginNonce :one
-SELECT address, nonce, expires_at, created_at
+SELECT address, nonce, expires_at, message, created_at
 FROM login_nonces
 WHERE address = $1
 LIMIT 1
 `
 
-func (q *Queries) GetLoginNonce(ctx context.Context, address string) (LoginNonce, error) {
+type GetLoginNonceRow struct {
+	Address   string    `json:"address"`
+	Nonce     string    `json:"nonce"`
+	ExpiresAt time.Time `json:"expires_at"`
+	Message   string    `json:"message"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (q *Queries) GetLoginNonce(ctx context.Context, address string) (GetLoginNonceRow, error) {
 	row := q.db.QueryRowContext(ctx, getLoginNonce, address)
-	var i LoginNonce
+	var i GetLoginNonceRow
 	err := row.Scan(
 		&i.Address,
 		&i.Nonce,
 		&i.ExpiresAt,
+		&i.Message,
 		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const upsertLoginNonce = `-- name: UpsertLoginNonce :exec
-INSERT INTO login_nonces (address, nonce, expires_at, created_at)
-VALUES ($1, $2, $3, NOW())
+INSERT INTO login_nonces (address, nonce, expires_at, message, created_at)
+VALUES ($1, $2, $3, $4, NOW())
 ON CONFLICT (address) DO UPDATE
 SET nonce = EXCLUDED.nonce,
-    expires_at = EXCLUDED.expires_at
+    expires_at = EXCLUDED.expires_at,
+    message = EXCLUDED.message
 `
 
 type UpsertLoginNonceParams struct {
 	Address   string    `json:"address"`
 	Nonce     string    `json:"nonce"`
 	ExpiresAt time.Time `json:"expires_at"`
+	Message   string    `json:"message"`
 }
 
 func (q *Queries) UpsertLoginNonce(ctx context.Context, arg UpsertLoginNonceParams) error {
-	_, err := q.db.ExecContext(ctx, upsertLoginNonce, arg.Address, arg.Nonce, arg.ExpiresAt)
+	_, err := q.db.ExecContext(ctx, upsertLoginNonce,
+		arg.Address,
+		arg.Nonce,
+		arg.ExpiresAt,
+		arg.Message,
+	)
 	return err
 }

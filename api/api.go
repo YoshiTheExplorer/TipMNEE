@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log"
 	"net/http"
 	"os"
 
@@ -37,6 +38,11 @@ func NewServer(store *db.Queries) *Server {
 	socialH := handlers.NewSocialLinksHandler(store)
 	payoutsH := handlers.NewPayoutsHandler(store)
 	ledgerH := handlers.NewLedgerEventsHandler(store)
+	claimsH, err := handlers.NewClaimsHandler(store)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 
 	// Public routes
 	public := s.router.Group("/api")
@@ -69,6 +75,10 @@ func NewServer(store *db.Queries) *Server {
 		// Earnings
 		protected.GET("/me/earnings", ledgerH.GetEarningsSummary)
 		protected.GET("/me/tips", ledgerH.ListMyTips)
+
+		// Claims
+		protected.POST("/social/youtube/verify", socialH.VerifyYouTubeChannel)
+		protected.POST("/claims/youtube", claimsH.SignYouTubeClaim)
 	}
 
 	return s

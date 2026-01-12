@@ -1,13 +1,18 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/YoshiTheExplorer/TipMNEE/api/middleware"
 	db "github.com/YoshiTheExplorer/TipMNEE/db/sqlc"
-
 	"github.com/gin-gonic/gin"
 )
 
@@ -21,7 +26,6 @@ func NewSocialLinksHandler(store *db.Queries) *SocialLinksHandler {
 
 type linkYouTubeReq struct {
 	ChannelID string `json:"channel_id" binding:"required"`
-	// handle optional if you want later
 }
 
 func (h *SocialLinksHandler) LinkYouTubeChannel(c *gin.Context) {
@@ -38,36 +42,194 @@ func (h *SocialLinksHandler) LinkYouTubeChannel(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
+	channelID := strings.TrimSpace(req.ChannelID)
+	if channelID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "channel_id required"})
+		return
+	}
 
-	// Safety: prevent takeover if channel already linked to someone else
+	// Takeover protection
 	existing, err := h.store.GetSocialLinkByPlatformUser(ctx, db.GetSocialLinkByPlatformUserParams{
 		Platform:       "youtube",
-		PlatformUserID: req.ChannelID,
+		PlatformUserID: channelID,
 	})
+	if err != nil && err != sql.ErrNoRows {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read existing link"})
+		return
+	}
+	if err == nil && existing.UserID != userID && existing.VerifiedAt.Valid {
+        c.JSON(http.StatusConflict, gin.H{"error": "channel already verified by another user"})
+        return
+    }
+
+	// Already linked to this user
+	if err == nil && existing.UserID == userID {
+		c.JSON(http.StatusOK, gin.H{"linked": true, "verified": existing.VerifiedAt.Valid})
+		return
+	}
+
+	// Create link as UNVERIFIED
+	_, err = h.store.CreateSocialLink(ctx, db.CreateSocialLinkParams{
+		UserID:         userID,
+		Platform:       "youtube",
+		PlatformUserID: channelID,
+		VerifiedAt:     sql.NullTime{Valid: false},
+	})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to link channel"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"linked": true, "verified": false})
+}
+
+type verifyYouTubeReq struct {
+	ChannelID   string `json:"channel_id" binding:"required"`
+	AccessToken string `json:"access_token" binding:"required"`
+}
+
+func (h *SocialLinksHandler) VerifyYouTubeChannel(c *gin.Context) {
+	userID := middleware.MustUserID(c)
+	if userID == 0 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "not authenticated"})
+		return
+	}
+
+	var req verifyYouTubeReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	channelID := strings.TrimSpace(req.ChannelID)
+	accessToken := strings.TrimSpace(req.AccessToken)
+	if channelID == "" || accessToken == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "channel_id and access_token required"})
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	// Takeover protection
+	existing, err := h.store.GetSocialLinkByPlatformUser(ctx, db.GetSocialLinkByPlatformUserParams{
+		Platform:       "youtube",
+		PlatformUserID: channelID,
+	})
+	if err != nil && err != sql.ErrNoRows {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read existing link"})
+		return
+	}
 	if err == nil && existing.UserID != userID {
 		c.JSON(http.StatusConflict, gin.H{"error": "channel already linked to another user"})
 		return
 	}
 
-	// Create link (if already linked to same user, you can no-op or update verified_at)
-	_, err = h.store.CreateSocialLink(ctx, db.CreateSocialLinkParams{
-		UserID:         userID,
-		Platform:       "youtube",
-		PlatformUserID: req.ChannelID,
-		VerifiedAt:     sql.NullTime{Time: time.Now(), Valid: true},
-	})
+	// OAuth ownership check
+	ok, err := verifyYouTubeOwnership(ctx, accessToken, channelID)
 	if err != nil {
-		// If duplicate because it's already linked to same user, you can ignore or return ok
-		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to link channel"})
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	if !ok {
+		c.JSON(http.StatusForbidden, gin.H{"error": "oauth token does not own this channel_id"})
 		return
 	}
 
-	// Backfill old unclaimed events for this channel
+	now := time.Now()
+
+    // Mark verified, with takeover if the existing record is UNVERIFIED and owned by someone else.
+    if err == sql.ErrNoRows {
+        // No existing link: create as verified
+        if _, err := h.store.CreateSocialLink(ctx, db.CreateSocialLinkParams{
+            UserID:         userID,
+            Platform:       "youtube",
+            PlatformUserID: channelID,
+            VerifiedAt:     sql.NullTime{Time: now, Valid: true},
+        }); err != nil {
+            c.JSON(http.StatusBadRequest, gin.H{"error": "failed to create social link"})
+            return
+        }
+    } else {
+        // Existing link found
+        if existing.UserID == userID {
+            // Same user: just ensure verified_at is set
+            if !existing.VerifiedAt.Valid {
+                if _, err := h.store.UpdateSocialLinkVerifiedAt(ctx, db.UpdateSocialLinkVerifiedAtParams{
+                    ID:         existing.ID,
+                    VerifiedAt: sql.NullTime{Time: now, Valid: true},
+                }); err != nil {
+                    c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to mark verified"})
+                    return
+                }
+            }
+        } else {
+            // Different user, but NOT verified (checked above) => TAKEOVER + verify
+            if _, err := h.store.TransferSocialLinkToUser(ctx, db.TransferSocialLinkToUserParams{
+                ID:         existing.ID,
+                UserID:     userID,
+                VerifiedAt: sql.NullTime{Time: now, Valid: true},
+            }); err != nil {
+                c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to takeover social link"})
+                return
+            }
+        }
+    }
+
+	// Backfill ledger only after verification
 	_ = h.store.BackfillLedgerEventsUserIDForChannel(ctx, db.BackfillLedgerEventsUserIDForChannelParams{
-		UserID: sql.NullInt64{Int64: userID, Valid: true},
-		Platform: "youtube",
-		PlatformUserID: req.ChannelID,
+		UserID:         sql.NullInt64{Int64: userID, Valid: true},
+		Platform:       "youtube",
+		PlatformUserID: channelID,
 	})
 
-	c.JSON(http.StatusOK, gin.H{"linked": true})
+	c.JSON(http.StatusOK, gin.H{"verified": true})
+}
+
+// Calls YouTube Data API: GET /youtube/v3/channels?part=id&mine=true
+func verifyYouTubeOwnership(ctx context.Context, accessToken, channelID string) (bool, error) {
+	url := "https://www.googleapis.com/youtube/v3/channels?part=id&mine=true"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("youtube api request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != http.StatusOK {
+		msg := strings.TrimSpace(string(body))
+		if len(msg) > 400 {
+			msg = msg[:400] + "..."
+		}
+		if msg == "" {
+			msg = resp.Status
+		}
+		return false, fmt.Errorf("youtube api error: %s", msg)
+	}
+
+	type ytResp struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}
+	var out ytResp
+	if err := json.Unmarshal(body, &out); err != nil {
+		return false, fmt.Errorf("failed to parse youtube response: %w", err)
+	}
+	if len(out.Items) == 0 {
+		return false, errors.New("no channels returned from youtube; token may lack youtube scopes")
+	}
+
+	for _, it := range out.Items {
+		if strings.TrimSpace(it.ID) == channelID {
+			return true, nil
+		}
+	}
+	return false, nil
 }

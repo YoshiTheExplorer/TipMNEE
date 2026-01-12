@@ -1,0 +1,2 @@
+ALTER TABLE login_nonces
+DROP COLUMN IF EXISTS message;

@@ -15,5 +15,6 @@ FROM social_links sl
 JOIN payouts p ON p.user_id = sl.user_id
 WHERE sl.platform = $1
   AND sl.platform_user_id = $2
+  AND sl.verified_at IS NOT NULL
   AND p.chain = $3
 LIMIT 1;

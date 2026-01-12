@@ -23,6 +23,9 @@ func RecoverAddressFromPersonalSign(message string, signatureHex string) (string
   if sigBytes[64] >= 27 {
     sigBytes[64] -= 27
   }
+  if sigBytes[64] != 0 && sigBytes[64] != 1 {
+    return "", errors.New("invalid signature recovery id (v)")
+  }
 
   prefixed := fmt.Sprintf("\x19Ethereum Signed Message:\n%d%s", len(message), message)
   hash := crypto.Keccak256Hash([]byte(prefixed))
