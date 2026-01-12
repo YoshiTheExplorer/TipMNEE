@@ -48,6 +48,8 @@ func NewServer(store *db.Queries) *Server {
 	// Global middleware
 	s.router.Use(gin.Logger(), gin.Recovery())
 
+	s.router.Use(middleware.CORS())
+
 	// Health
 	s.router.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
 
@@ -57,6 +59,10 @@ func NewServer(store *db.Queries) *Server {
 	socialH := handlers.NewSocialLinksHandler(store)
 	payoutsH := handlers.NewPayoutsHandler(store)
 	ledgerH := handlers.NewLedgerEventsHandler(store)
+	ledgerIngestH, err := handlers.NewLedgerIngestHandler(store)
+	if err != nil {
+		log.Fatal(err)
+	}
 	claimsH, err := handlers.NewClaimsHandler(store)
 	if err != nil {
 		log.Fatal(err)
@@ -68,6 +74,9 @@ func NewServer(store *db.Queries) *Server {
 	{
 		// Resolve (public) - used by extension
 		public.GET("/resolve/youtube/:channelId", payoutsH.ResolveYouTubeChannelPayout)
+
+		// Transactions
+		public.POST("/ledger/deposit", ledgerIngestH.RecordDeposit)
 	}
 
 	// Auth routes
@@ -95,6 +104,9 @@ func NewServer(store *db.Queries) *Server {
 		// Earnings
 		protected.GET("/me/earnings", ledgerH.GetEarningsSummary)
 		protected.GET("/me/tips", ledgerH.ListMyTips)
+
+		// Transactions
+		protected.POST("/ledger/withdrawal", ledgerIngestH.RecordWithdrawal)
 
 		// Claims
 		protected.POST("/social/youtube/verify", socialH.VerifyYouTubeChannel)

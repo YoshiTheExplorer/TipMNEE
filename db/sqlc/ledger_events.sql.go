@@ -8,6 +8,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"time"
 )
 
 const backfillLedgerEventsUserIDForChannel = `-- name: BackfillLedgerEventsUserIDForChannel :exec
@@ -53,6 +54,62 @@ func (q *Queries) GetEarningsSummaryForUser(ctx context.Context, dollar_1 int64)
 	row := q.db.QueryRowContext(ctx, getEarningsSummaryForUser, dollar_1)
 	var i GetEarningsSummaryForUserRow
 	err := row.Scan(&i.EarnedRaw, &i.WithdrawnRaw, &i.PendingRaw)
+	return i, err
+}
+
+const insertLedgerEvent = `-- name: InsertLedgerEvent :one
+INSERT INTO ledger_events (
+  platform, platform_user_id, user_id, event_type, amount_raw, message,
+  tx_hash, log_index, block_time, created_at, updated_at
+) VALUES (
+  $1, $2, $3, $4, $5, $6,
+  $7, $8, $9, NOW(), NOW()
+)
+ON CONFLICT (tx_hash, log_index) DO NOTHING
+RETURNING
+  id, platform, platform_user_id, user_id, event_type, amount_raw, message,
+  tx_hash, log_index, block_time, created_at, updated_at
+`
+
+type InsertLedgerEventParams struct {
+	Platform       string         `json:"platform"`
+	PlatformUserID string         `json:"platform_user_id"`
+	UserID         sql.NullInt64  `json:"user_id"`
+	EventType      string         `json:"event_type"`
+	AmountRaw      string         `json:"amount_raw"`
+	Message        sql.NullString `json:"message"`
+	TxHash         string         `json:"tx_hash"`
+	LogIndex       int32          `json:"log_index"`
+	BlockTime      time.Time      `json:"block_time"`
+}
+
+func (q *Queries) InsertLedgerEvent(ctx context.Context, arg InsertLedgerEventParams) (LedgerEvent, error) {
+	row := q.db.QueryRowContext(ctx, insertLedgerEvent,
+		arg.Platform,
+		arg.PlatformUserID,
+		arg.UserID,
+		arg.EventType,
+		arg.AmountRaw,
+		arg.Message,
+		arg.TxHash,
+		arg.LogIndex,
+		arg.BlockTime,
+	)
+	var i LedgerEvent
+	err := row.Scan(
+		&i.ID,
+		&i.Platform,
+		&i.PlatformUserID,
+		&i.UserID,
+		&i.EventType,
+		&i.AmountRaw,
+		&i.Message,
+		&i.TxHash,
+		&i.LogIndex,
+		&i.BlockTime,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
 	return i, err
 }
 

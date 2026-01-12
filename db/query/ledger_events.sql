@@ -27,3 +27,16 @@ SET user_id = $1,
 WHERE platform = $2
   AND platform_user_id = $3
   AND user_id IS NULL;
+
+-- name: InsertLedgerEvent :one
+INSERT INTO ledger_events (
+  platform, platform_user_id, user_id, event_type, amount_raw, message,
+  tx_hash, log_index, block_time, created_at, updated_at
+) VALUES (
+  $1, $2, $3, $4, $5, $6,
+  $7, $8, $9, NOW(), NOW()
+)
+ON CONFLICT (tx_hash, log_index) DO NOTHING
+RETURNING
+  id, platform, platform_user_id, user_id, event_type, amount_raw, message,
+  tx_hash, log_index, block_time, created_at, updated_at;

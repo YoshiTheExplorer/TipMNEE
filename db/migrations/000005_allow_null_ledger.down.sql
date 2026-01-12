@@ -1,0 +1,2 @@
+ALTER TABLE ledger_events
+ALTER COLUMN user_id SET NOT NULL;
