@@ -1,4 +1,4 @@
-TipMNEE Backend (Frontend Dev Setup)
+# TipMNEE Backend (Frontend Dev Setup)
 
 This backend powers the TipMNEE frontend and browser extension.
 It handles wallet login, YouTube channel verification, payout resolution, and claim signing.
@@ -28,18 +28,14 @@ POSTGRES_PORT=5434
 JWT_SECRET=LongString
 PORT=8080
 
-# Sepolia
 CHAIN_ID=11155111
 
-# Contracts
 ESCROW_CONTRACT=0x677F8622BCE181Ea7c85aF75742DF592192b4500
 TOKEN_CONTRACT=0x8ccedbAe4916b79da7F3F612EfB2EB93A2bFD6cF
 
-# RPCs
 ETH_RPC_URL=https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY
 SEPOLIA_RPC_URL=https://eth-sepolia.g.alchemy.com/v2/YOUR_KEY
 
-# Used only for EIP-712 claim signing
 VERIFIER_PRIVATE_KEY=YOUR_PRIVATE_KEY
 
 Replace all instance of SEPOLIA_RPC_URL with ETH_RPC_URL
